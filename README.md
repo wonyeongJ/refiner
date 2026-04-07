@@ -16,8 +16,9 @@
 - SQL 구문 강조(Syntax Highlighting) 기능을 통해 코드의 가독성을 극대화합니다.
 
 ### 2. Java VO 자동 생성 (Java VO Generator)
-- `CREATE TABLE` 구문을 분석하여 Lombok `@Data` 어노테이션 기반의 Java 클래스 코드를 즉시 생성합니다.
-- **Oracle → Java 데이터 타입 자동 매핑**: NUMBER, VARCHAR2, DATE 등의 데이터 타입을 적절한 Java 타입으로 변환합니다.
+- `CREATE TABLE` 구문을 분석하여 표준 Java VO 클래스 코드를 즉시 생성합니다.
+- **Getter/Setter 자동 생성**: 별도의 라이브러리 없이도 바로 사용할 수 있도록 필드별 Getter와 Setter 메서드를 포함합니다.
+- **Oracle → Java 데이터 타입 자동 매핑**: NUMBER, DATE, RAW 등의 타입을 실무 관례에 맞춰 변환합니다. 특히 NUMBER 타입은 `NOT NULL` 여부에 따라 `int`와 `Integer`를 구분하여 생성합니다.
 - **Javadoc 자동 연동**: `COMMENT ON COLUMN` 구문이 있을 경우, 해당 코멘트를 추출하여 Java 필드의 Javadoc 주석으로 추가합니다.
 
 ### 3. JSON 포매터 (JSON Formatter)
@@ -99,11 +100,12 @@ python main.py
 
 ## 🗺️ Oracle → Java 타입 매핑 참조 테이블
 
-| Oracle 데이터 타입 | 매핑되는 Java 타입 |
-|--------------------|--------------------|
-| `VARCHAR2`, `CHAR`, `CLOB` | `String` |
-| `NUMBER(p, 0)` (p<=9) | `Integer` |
-| `NUMBER(p, 0)` (p<=18) | `Long` |
-| `NUMBER` (p, s) | `BigDecimal` |
-| `DATE`, `TIMESTAMP` | `LocalDateTime` |
-| `BLOB`, `RAW` | `byte[]` |
+| Oracle 데이터 타입 | Java 타입 | 비고 |
+|--------------------|-----------|------|
+| `VARCHAR2`, `CHAR`, `CLOB` | `String` | 문자열 계열 |
+| `NUMBER`, `NUMERIC`, `INT` | **`int`** | `NOT NULL` 제약 조건이 있는 경우 |
+| `NUMBER`, `NUMERIC`, `INT` | **`Integer`** | `NULL` 허용인 경우 (Wrapper class) |
+| `DATE`, `TIMESTAMP` | `String` | 실무 편의를 위해 String으로 매핑 |
+| `RAW` | `String` | 실무 편의를 위해 String으로 매핑 |
+| `BLOB`, `LONG RAW` | `byte[]` | 이진 데이터 계열 |
+| `FLOAT`, `DOUBLE` | `Double` | 실수 계열 |
