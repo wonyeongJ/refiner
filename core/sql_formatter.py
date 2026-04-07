@@ -1,36 +1,16 @@
 """
 SQL Formatter - Custom Convention
-
-원하는 출력 형태:
-SELECT
-\tCOL1,
-\tCOL2
-FROM
-\tTABLE
-WHERE
-\tCONDITION
-\tAND CONDITION2
-ORDER BY
-\tCOL DESC
-;
 """
-
 import re
 
 TAB = "\t"
 
-
 def _ki(depth: int) -> str:
-    return TAB * (depth * 3)
-
+    return TAB * depth
 
 def _ci(depth: int) -> str:
-    return TAB * (depth * 3 + 1)
+    return TAB * (depth + 1)
 
-
-# ─────────────────────────────────────────────────────────────
-# 메인 진입점
-# ─────────────────────────────────────────────────────────────
 def format_multiple_statements(raw_sql: str) -> str:
     if not raw_sql.strip():
         return ""
@@ -41,7 +21,6 @@ def format_multiple_statements(raw_sql: str) -> str:
         if s:
             results.append(format_sql(s, depth=0))
     return "\n\n-- ─────────────────────────────────────\n\n".join(results)
-
 
 def format_sql(raw_sql: str, depth: int = 0) -> str:
     sql = raw_sql.strip()
@@ -63,10 +42,6 @@ def format_sql(raw_sql: str, depth: int = 0) -> str:
         result += "\n;"
     return result
 
-
-# ─────────────────────────────────────────────────────────────
-# 절 렌더링
-# ─────────────────────────────────────────────────────────────
 def render_clause(name: str, content: str, depth: int, lines: list) -> None:
     ki = _ki(depth)
     ci = _ci(depth)
@@ -77,13 +52,21 @@ def render_clause(name: str, content: str, depth: int, lines: list) -> None:
         for idx, col in enumerate(cols):
             col = col.strip()
             comma = "," if idx < len(cols) - 1 else ""
-            lines.append(f"{ci}{upper_kw(col)}{comma}")
+            
+            # DISTINCT 예외 처리
+            col_up = col.upper()
+            if col_up.startswith("DISTINCT "):
+                fmt = "distinct " + format_expr(col[9:].strip(), depth)
+            else:
+                fmt = format_expr(col, depth)
+                
+            lines.append(f"{ci}{fmt}{comma}")
 
     elif name == "FROM":
         lines.append(f"{ki}FROM")
         tables = split_by_comma(content)
         for tbl in tables:
-            lines.append(f"{ci}{tbl.strip()}")
+            lines.append(f"{ci}{format_expr(tbl.strip(), depth)}")
 
     elif name in ("WHERE", "HAVING"):
         lines.append(f"{ki}{name}")
@@ -97,56 +80,64 @@ def render_clause(name: str, content: str, depth: int, lines: list) -> None:
     elif name in ("ORDER BY", "GROUP BY"):
         lines.append(f"{ki}{name}")
         items = split_by_comma(content)
-        for item in items:
-            lines.append(f"{ci}{item.strip()}")
+        for idx, item in enumerate(items):
+            comma = "," if idx < len(items) - 1 else ""
+            lines.append(f"{ci}{format_expr(item.strip(), depth)}{comma}")
 
     elif name in ("UNION", "UNION ALL", "INTERSECT", "EXCEPT"):
         lines.append(f"{ki}{name}")
         lines.append(format_sql(content, depth))
 
     elif "JOIN" in name:
-        # "LEFT JOIN t ON cond" → JOIN keyword / table / ON / condition
         on_pos = find_kw_top(content, "ON")
-        lines.append(f"{ki}{name}")
         if on_pos >= 0:
-            lines.append(f"{ci}{content[:on_pos].strip()}")
-            lines.append(f"{ki}ON")
-            lines.append(f"{ci}{content[on_pos+2:].strip()}")
+            tbl_part = content[:on_pos].strip()
+            tbl_formatted = format_expr(tbl_part, depth)
+            cond_part = content[on_pos+2:].strip()
+            cond_formatted = format_expr(cond_part, depth)
+            lines.append(f"{ci}{name} {tbl_formatted}")
+            lines.append(f"{ci}\t{upper_kw('ON')} {cond_formatted}")
         else:
-            lines.append(f"{ci}{content}")
+            lines.append(f"{ci}{name} {format_expr(content, depth)}")
 
     else:
         lines.append(f"{ki}{name}")
         if content:
-            lines.append(f"{ci}{content}")
+            lines.append(f"{ci}{format_expr(content, depth)}")
 
+def format_operators(text: str) -> str:
+    # =, !=, <=, >=, <> 연산자 주변에 항상 1칸 공백 보장 (예: a=b -> a = b)
+    return re.sub(r'\s*(<>|!=|<=|>=|=)\s*', r' \1 ', text)
 
-# ─────────────────────────────────────────────────────────────
-# 표현식 포매팅 (서브쿼리 재귀)
-# ─────────────────────────────────────────────────────────────
 def format_expr(expr: str, depth: int) -> str:
     paren_pos = find_subquery_paren(expr)
     if paren_pos is None:
-        return upper_kw(expr)
+        return format_operators(upper_kw(expr))
 
     paren_end = find_matching_paren(expr, paren_pos)
     if paren_end is None:
-        return upper_kw(expr)
+        return format_operators(upper_kw(expr))
 
-    before = upper_kw(expr[:paren_pos])
+    before = format_operators(upper_kw(expr[:paren_pos]).strip())
     inner = expr[paren_pos + 1: paren_end].strip()
-    after = expr[paren_end + 1:]
+    after = format_operators(upper_kw(expr[paren_end + 1:]).strip())
 
     sub_depth = depth + 1
-    sub_ki = _ki(sub_depth)
 
     sub_formatted = format_sql(inner, depth=sub_depth)
-    result = f"{before}(\n{sub_formatted}\n{sub_ki})"
-
-    if after.strip():
-        result += upper_kw(after)
+    
+    result = ""
+    if before:
+        result += f"{before} (\n"
+    else:
+        result += "(\n"
+        
+    result += f"{sub_formatted}\n{_ki(sub_depth)})"
+    
+    if after:
+        result += f" {after}"
+        
     return result
-
 
 def upper_kw(text: str) -> str:
     keywords = [
@@ -161,11 +152,6 @@ def upper_kw(text: str) -> str:
     pattern = r"\b(" + "|".join(keywords) + r")\b"
     return re.sub(pattern, lambda m: m.group(0).upper(), text, flags=re.IGNORECASE)
 
-
-# ─────────────────────────────────────────────────────────────
-# 절 분리 (clause extraction)
-# ─────────────────────────────────────────────────────────────
-# 긴 키워드 우선 (ORDER BY > ORDER)
 _CLAUSES = [
     "ORDER BY", "GROUP BY",
     "UNION ALL", "INTERSECT ALL", "EXCEPT ALL",
@@ -177,11 +163,7 @@ _CLAUSES = [
     "LIMIT", "OFFSET",
 ]
 
-
 def extract_clauses(sql: str) -> list[tuple[str, str]]:
-    """
-    최상위(괄호 밖) SQL 키워드 경계를 찾아 (절이름, 내용) 리스트 반환.
-    """
     su = sql.upper()
     n = len(sql)
     positions: list[tuple[int, str]] = []
@@ -193,22 +175,18 @@ def extract_clauses(sql: str) -> list[tuple[str, str]]:
 
     while i < n:
         ch = sql[i]
-
-        # ── 문자열 내부
         if in_str:
             if ch == str_char:
                 in_str = False
             i += 1
             continue
 
-        # ── 문자열 시작
         if ch in ("'", '"'):
             in_str = True
             str_char = ch
             i += 1
             continue
 
-        # ── 괄호 깊이 추적
         if ch == "(":
             depth += 1
             i += 1
@@ -219,16 +197,13 @@ def extract_clauses(sql: str) -> list[tuple[str, str]]:
             i += 1
             continue
 
-        # ── 최상위에서만 절 키워드 탐색
         if depth == 0:
             matched_clause = ""
             for clause in _CLAUSES:
                 cl = len(clause)
                 if su[i: i + cl] == clause:
-                    # 앞 경계: 시작이거나 단어 문자 아님
                     if i > 0 and (sql[i - 1].isalnum() or sql[i - 1] == "_"):
                         continue
-                    # 뒤 경계: 끝이거나 단어 문자 아님
                     end_pos = i + cl
                     if end_pos < n and (sql[end_pos].isalnum() or sql[end_pos] == "_"):
                         continue
@@ -242,7 +217,6 @@ def extract_clauses(sql: str) -> list[tuple[str, str]]:
 
         i += 1
 
-    # 각 절의 내용 추출
     result: list[tuple[str, str]] = []
     for idx, (pos, name) in enumerate(positions):
         content_start = pos + len(name)
@@ -251,15 +225,7 @@ def extract_clauses(sql: str) -> list[tuple[str, str]]:
         result.append((name, content))
     return result
 
-
-# ─────────────────────────────────────────────────────────────
-# 조건 분리 (AND / OR at top level)
-# ─────────────────────────────────────────────────────────────
 def split_conditions(text: str) -> list[tuple[str, str]]:
-    """
-    depth=0의 AND/OR로 분리.
-    반환: [(connector, condition), ...] connector = '' | 'AND' | 'OR'
-    """
     results: list[tuple[str, str]] = []
     buf: list[str] = []
     connector = ""
@@ -273,7 +239,6 @@ def split_conditions(text: str) -> list[tuple[str, str]]:
 
     while i < n:
         ch = text[i]
-
         if in_str:
             buf.append(ch)
             if ch == str_char:
@@ -302,7 +267,6 @@ def split_conditions(text: str) -> list[tuple[str, str]]:
             continue
 
         if depth == 0:
-            # AND 감지
             if tu[i: i + 3] == "AND":
                 pre_ok = (i == 0) or not (text[i - 1].isalnum() or text[i - 1] == "_")
                 suf_idx = i + 3
@@ -314,12 +278,10 @@ def split_conditions(text: str) -> list[tuple[str, str]]:
                     buf = []
                     connector = "AND"
                     i = suf_idx
-                    # 공백 스킵
                     while i < n and text[i] in (" ", "\t", "\n", "\r"):
                         i += 1
                     continue
 
-            # OR 감지
             if tu[i: i + 2] == "OR":
                 pre_ok = (i == 0) or not (text[i - 1].isalnum() or text[i - 1] == "_")
                 suf_idx = i + 2
@@ -343,10 +305,6 @@ def split_conditions(text: str) -> list[tuple[str, str]]:
         results.append((connector, part))
     return results
 
-
-# ─────────────────────────────────────────────────────────────
-# 콤마 분리
-# ─────────────────────────────────────────────────────────────
 def split_by_comma(text: str) -> list[str]:
     parts: list[str] = []
     buf: list[str] = []
@@ -384,10 +342,6 @@ def split_by_comma(text: str) -> list[str]:
         parts.append("".join(buf))
     return [p for p in parts if p.strip()]
 
-
-# ─────────────────────────────────────────────────────────────
-# 세미콜론 분리
-# ─────────────────────────────────────────────────────────────
 def split_by_semicolon(sql: str) -> list[str]:
     stmts: list[str] = []
     buf: list[str] = []
@@ -424,12 +378,7 @@ def split_by_semicolon(sql: str) -> list[str]:
         stmts.append(s)
     return stmts
 
-
-# ─────────────────────────────────────────────────────────────
-# 서브쿼리 괄호 탐색
-# ─────────────────────────────────────────────────────────────
 def find_subquery_paren(expr: str) -> int | None:
-    """SELECT 서브쿼리를 감싸는 최초 '(' 위치 반환."""
     n = len(expr)
     i = 0
     while i < n:
@@ -439,12 +388,10 @@ def find_subquery_paren(expr: str) -> int | None:
                 inner = expr[i + 1: end].strip()
                 if re.match(r"^SELECT\b", inner, re.IGNORECASE):
                     return i
-            # '('를 찾았지만 SELECT 서브쿼리가 아니면 다음으로
             i += 1
         else:
             i += 1
     return None
-
 
 def find_matching_paren(s: str, start: int) -> int | None:
     if start >= len(s) or s[start] != "(":
@@ -470,9 +417,7 @@ def find_matching_paren(s: str, start: int) -> int | None:
                 return i
     return None
 
-
 def find_kw_top(text: str, keyword: str) -> int:
-    """depth=0에서 키워드의 시작 위치 반환. 없으면 -1."""
     kw = keyword.upper()
     tu = text.upper()
     n = len(text)
@@ -502,6 +447,14 @@ def find_kw_top(text: str, keyword: str) -> int:
             i += 1
             continue
         if depth == 0 and tu[i: i + len(kw)] == kw:
+            # Check boundaries
+            if i > 0 and (text[i-1].isalnum() or text[i-1] == "_"):
+                i += 1
+                continue
+            end = i + len(kw)
+            if end < n and (text[end].isalnum() or text[end] == "_"):
+                i += 1
+                continue
             return i
         i += 1
     return -1
