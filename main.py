@@ -335,7 +335,7 @@ class RefinerMainWindow(QMainWindow):
                     stop:0.3 #131C2E,
                     stop:0.7 #1A1030,
                     stop:1 #0D1117);
-                border-bottom: 2px solid {COLORS['border']};
+                border-bottom: none;
                 border-radius: 0;
                 margin: 0;
             }}
