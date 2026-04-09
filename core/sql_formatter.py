@@ -1,4 +1,4 @@
-"""
+﻿"""
 SQL Formatter - Custom Convention
 """
 import re
@@ -11,6 +11,54 @@ def _ki(depth: int) -> str:
 def _ci(depth: int) -> str:
     return TAB * (depth + 1)
 
+def _append_expr_with_prefix(lines: list[str], indent: str, prefix: str, expr: str) -> None:
+    expr_lines = expr.splitlines() or [expr]
+    lines.append(f"{indent}{prefix}{expr_lines[0]}")
+    if len(expr_lines) > 1:
+        lines.extend(expr_lines[1:])
+
+def _mask_sql_comments(text: str) -> str:
+    chars = list(text)
+    n = len(chars)
+    i = 0
+    in_str = False
+    str_char = ""
+    while i < n:
+        ch = chars[i]
+        if in_str:
+            if ch == str_char:
+                in_str = False
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_str = True
+            str_char = ch
+            i += 1
+            continue
+        if ch == "-" and i + 1 < n and chars[i + 1] == "-":
+            chars[i] = " "
+            chars[i + 1] = " "
+            i += 2
+            while i < n and chars[i] not in ("\n", "\r"):
+                chars[i] = " "
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and chars[i + 1] == "*":
+            chars[i] = " "
+            chars[i + 1] = " "
+            i += 2
+            while i + 1 < n and not (chars[i] == "*" and chars[i + 1] == "/"):
+                if chars[i] not in ("\n", "\r"):
+                    chars[i] = " "
+                i += 1
+            if i + 1 < n:
+                chars[i] = " "
+                chars[i + 1] = " "
+                i += 2
+            continue
+        i += 1
+    return "".join(chars)
+
 def format_multiple_statements(raw_sql: str) -> str:
     if not raw_sql.strip():
         return ""
@@ -18,9 +66,9 @@ def format_multiple_statements(raw_sql: str) -> str:
     results = []
     for s in stmts:
         s = s.strip()
-        if s:
+        if s and not is_comment_only_sql(s):
             results.append(format_sql(s, depth=0))
-    return "\n\n-- ─────────────────────────────────────\n\n".join(results)
+    return "\n\n".join(results)
 
 def format_sql(raw_sql: str, depth: int = 0) -> str:
     sql = raw_sql.strip()
@@ -51,16 +99,16 @@ def render_clause(name: str, content: str, depth: int, lines: list) -> None:
         cols = split_by_comma(content)
         for idx, col in enumerate(cols):
             col = col.strip()
-            comma = "," if idx < len(cols) - 1 else ""
             
-            # DISTINCT 예외 처리
+            # DISTINCT ?덉쇅 泥섎━
             col_up = col.upper()
             if col_up.startswith("DISTINCT "):
-                fmt = "distinct " + format_expr(col[9:].strip(), depth)
+                fmt = "DISTINCT " + format_expr(col[9:].strip(), depth)
             else:
                 fmt = format_expr(col, depth)
-                
-            lines.append(f"{ci}{fmt}{comma}")
+
+            prefix = "" if idx == 0 else ", "
+            _append_expr_with_prefix(lines, ci, prefix, fmt)
 
     elif name == "FROM":
         lines.append(f"{ki}FROM")
@@ -81,24 +129,28 @@ def render_clause(name: str, content: str, depth: int, lines: list) -> None:
         lines.append(f"{ki}{name}")
         items = split_by_comma(content)
         for idx, item in enumerate(items):
-            comma = "," if idx < len(items) - 1 else ""
-            lines.append(f"{ci}{format_expr(item.strip(), depth)}{comma}")
+            prefix = "" if idx == 0 else ", "
+            _append_expr_with_prefix(lines, ci, prefix, format_expr(item.strip(), depth))
 
     elif name in ("UNION", "UNION ALL", "INTERSECT", "EXCEPT"):
         lines.append(f"{ki}{name}")
-        lines.append(format_sql(content, depth))
+        lines.append("")
+        if content:
+            lines.append(format_sql(content, depth))
 
     elif "JOIN" in name:
         on_pos = find_kw_top(content, "ON")
+        ji = _ki(depth + 2)
+        oi = _ki(depth + 3)
         if on_pos >= 0:
             tbl_part = content[:on_pos].strip()
-            tbl_formatted = format_expr(tbl_part, depth)
+            tbl_formatted = format_expr(tbl_part, depth + 1)
             cond_part = content[on_pos+2:].strip()
-            cond_formatted = format_expr(cond_part, depth)
-            lines.append(f"{ci}{name} {tbl_formatted}")
-            lines.append(f"{ci}\t{upper_kw('ON')} {cond_formatted}")
+            cond_formatted = format_expr(cond_part, depth + 1)
+            _append_expr_with_prefix(lines, ji, f"{name} ", tbl_formatted)
+            _append_expr_with_prefix(lines, oi, f"{upper_kw('ON')} ", cond_formatted)
         else:
-            lines.append(f"{ci}{name} {format_expr(content, depth)}")
+            _append_expr_with_prefix(lines, ji, f"{name} ", format_expr(content, depth + 1))
 
     else:
         lines.append(f"{ki}{name}")
@@ -106,7 +158,7 @@ def render_clause(name: str, content: str, depth: int, lines: list) -> None:
             lines.append(f"{ci}{format_expr(content, depth)}")
 
 def format_operators(text: str) -> str:
-    # =, !=, <=, >=, <> 연산자 주변에 항상 1칸 공백 보장 (예: a=b -> a = b)
+    # =, !=, <=, >=, <> ?곗궛??二쇰?????긽 1移?怨듬갚 蹂댁옣 (?? a=b -> a = b)
     return re.sub(r'\s*(<>|!=|<=|>=|=)\s*', r' \1 ', text)
 
 def format_expr(expr: str, depth: int) -> str:
@@ -124,7 +176,7 @@ def format_expr(expr: str, depth: int) -> str:
 
     sub_depth = depth + 1
 
-    sub_formatted = format_sql(inner, depth=sub_depth)
+    sub_formatted = format_sql(inner, depth=sub_depth + 1)
     
     result = ""
     if before:
@@ -163,10 +215,31 @@ _CLAUSES = [
     "LIMIT", "OFFSET",
 ]
 
+def _match_clause_at(text_upper: str, start: int, clause: str) -> int | None:
+    """Match SQL clause allowing one-or-more spaces between words."""
+    n = len(text_upper)
+    words = clause.split(" ")
+    i = start
+
+    for idx, w in enumerate(words):
+        wlen = len(w)
+        if text_upper[i:i + wlen] != w:
+            return None
+        i += wlen
+
+        if idx < len(words) - 1:
+            if i >= n or text_upper[i] not in (" ", "\t", "\n", "\r"):
+                return None
+            while i < n and text_upper[i] in (" ", "\t", "\n", "\r"):
+                i += 1
+
+    return i
+
 def extract_clauses(sql: str) -> list[tuple[str, str]]:
-    su = sql.upper()
+    masked = _mask_sql_comments(sql)
+    su = masked.upper()
     n = len(sql)
-    positions: list[tuple[int, str]] = []
+    positions: list[tuple[int, str, int]] = []
 
     depth = 0
     in_str = False
@@ -174,7 +247,7 @@ def extract_clauses(sql: str) -> list[tuple[str, str]]:
     i = 0
 
     while i < n:
-        ch = sql[i]
+        ch = masked[i]
         if in_str:
             if ch == str_char:
                 in_str = False
@@ -199,27 +272,29 @@ def extract_clauses(sql: str) -> list[tuple[str, str]]:
 
         if depth == 0:
             matched_clause = ""
+            matched_end = -1
             for clause in _CLAUSES:
-                cl = len(clause)
-                if su[i: i + cl] == clause:
-                    if i > 0 and (sql[i - 1].isalnum() or sql[i - 1] == "_"):
-                        continue
-                    end_pos = i + cl
-                    if end_pos < n and (sql[end_pos].isalnum() or sql[end_pos] == "_"):
-                        continue
-                    matched_clause = clause
-                    break
+                end_pos = _match_clause_at(su, i, clause)
+                if end_pos is None:
+                    continue
+                if i > 0 and (masked[i - 1].isalnum() or masked[i - 1] == "_"):
+                    continue
+                if end_pos < n and (masked[end_pos].isalnum() or masked[end_pos] == "_"):
+                    continue
+                matched_clause = clause
+                matched_end = end_pos
+                break
 
             if matched_clause:
-                positions.append((i, matched_clause))
-                i += len(matched_clause)
+                positions.append((i, matched_clause, matched_end))
+                i = matched_end
                 continue
 
         i += 1
 
     result: list[tuple[str, str]] = []
-    for idx, (pos, name) in enumerate(positions):
-        content_start = pos + len(name)
+    for idx, (pos, name, end_pos) in enumerate(positions):
+        content_start = end_pos
         content_end = positions[idx + 1][0] if idx + 1 < len(positions) else n
         content = sql[content_start:content_end].strip()
         result.append((name, content))
@@ -233,12 +308,14 @@ def split_conditions(text: str) -> list[tuple[str, str]]:
     depth = 0
     in_str = False
     str_char = ""
-    tu = text.upper()
+    masked = _mask_sql_comments(text)
+    tu = masked.upper()
     i = 0
     n = len(text)
 
     while i < n:
         ch = text[i]
+        mch = masked[i]
         if in_str:
             buf.append(ch)
             if ch == str_char:
@@ -268,9 +345,9 @@ def split_conditions(text: str) -> list[tuple[str, str]]:
 
         if depth == 0:
             if tu[i: i + 3] == "AND":
-                pre_ok = (i == 0) or not (text[i - 1].isalnum() or text[i - 1] == "_")
+                pre_ok = (i == 0) or not (masked[i - 1].isalnum() or masked[i - 1] == "_")
                 suf_idx = i + 3
-                suf_ok = (suf_idx >= n) or not (text[suf_idx].isalnum() or text[suf_idx] == "_")
+                suf_ok = (suf_idx >= n) or not (masked[suf_idx].isalnum() or masked[suf_idx] == "_")
                 if pre_ok and suf_ok:
                     part = "".join(buf).strip()
                     if part:
@@ -283,9 +360,9 @@ def split_conditions(text: str) -> list[tuple[str, str]]:
                     continue
 
             if tu[i: i + 2] == "OR":
-                pre_ok = (i == 0) or not (text[i - 1].isalnum() or text[i - 1] == "_")
+                pre_ok = (i == 0) or not (masked[i - 1].isalnum() or masked[i - 1] == "_")
                 suf_idx = i + 2
-                suf_ok = (suf_idx >= n) or not (text[suf_idx].isalnum() or text[suf_idx] == "_")
+                suf_ok = (suf_idx >= n) or not (masked[suf_idx].isalnum() or masked[suf_idx] == "_")
                 if pre_ok and suf_ok:
                     part = "".join(buf).strip()
                     if part:
@@ -297,7 +374,7 @@ def split_conditions(text: str) -> list[tuple[str, str]]:
                         i += 1
                     continue
 
-        buf.append(ch)
+        buf.append(ch if mch != " " else text[i])
         i += 1
 
     part = "".join(buf).strip()
@@ -378,6 +455,14 @@ def split_by_semicolon(sql: str) -> list[str]:
         stmts.append(s)
     return stmts
 
+def is_comment_only_sql(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    without_block = re.sub(r"/\*.*?\*/", "", stripped, flags=re.DOTALL)
+    without_line = re.sub(r"--[^\n\r]*", "", without_block)
+    return not without_line.strip()
+
 def find_subquery_paren(expr: str) -> int | None:
     n = len(expr)
     i = 0
@@ -419,14 +504,15 @@ def find_matching_paren(s: str, start: int) -> int | None:
 
 def find_kw_top(text: str, keyword: str) -> int:
     kw = keyword.upper()
-    tu = text.upper()
+    masked = _mask_sql_comments(text)
+    tu = masked.upper()
     n = len(text)
     depth = 0
     in_str = False
     str_char = ""
     i = 0
     while i < n:
-        ch = text[i]
+        ch = masked[i]
         if in_str:
             if ch == str_char:
                 in_str = False
@@ -448,13 +534,14 @@ def find_kw_top(text: str, keyword: str) -> int:
             continue
         if depth == 0 and tu[i: i + len(kw)] == kw:
             # Check boundaries
-            if i > 0 and (text[i-1].isalnum() or text[i-1] == "_"):
+            if i > 0 and (masked[i-1].isalnum() or masked[i-1] == "_"):
                 i += 1
                 continue
             end = i + len(kw)
-            if end < n and (text[end].isalnum() or text[end] == "_"):
+            if end < n and (masked[end].isalnum() or masked[end] == "_"):
                 i += 1
                 continue
             return i
         i += 1
     return -1
+
