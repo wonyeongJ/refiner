@@ -17,6 +17,14 @@ def _append_expr_with_prefix(lines: list[str], indent: str, prefix: str, expr: s
     if len(expr_lines) > 1:
         lines.extend(expr_lines[1:])
 
+def _append_block(lines: list[str], indent: str, expr: str, suffix: str = "") -> None:
+    expr_lines = expr.splitlines() or [expr]
+    if suffix:
+        expr_lines[-1] = f"{expr_lines[-1]}{suffix}"
+    lines.append(f"{indent}{expr_lines[0]}")
+    if len(expr_lines) > 1:
+        lines.extend(expr_lines[1:])
+
 def _mask_sql_comments(text: str) -> str:
     chars = list(text)
     n = len(chars)
@@ -76,6 +84,23 @@ def format_sql(raw_sql: str, depth: int = 0) -> str:
         sql = sql[:-1].strip()
     if not sql:
         return ""
+
+    leading = sql.lstrip().upper()
+    if leading.startswith("INSERT"):
+        result = format_insert_sql(sql, depth)
+        if depth == 0:
+            result += "\n;"
+        return result
+    if leading.startswith("UPDATE"):
+        result = format_update_sql(sql, depth)
+        if depth == 0:
+            result += "\n;"
+        return result
+    if leading.startswith("DELETE"):
+        result = format_delete_sql(sql, depth)
+        if depth == 0:
+            result += "\n;"
+        return result
 
     clauses = extract_clauses(sql)
     if not clauses:
@@ -161,7 +186,193 @@ def format_operators(text: str) -> str:
     # =, !=, <=, >=, <> ?곗궛??二쇰?????긽 1移?怨듬갚 蹂댁옣 (?? a=b -> a = b)
     return re.sub(r'\s*(<>|!=|<=|>=|=)\s*', r' \1 ', text)
 
+def _split_head_parenthesized(text: str) -> tuple[str, str] | None:
+    stripped = text.strip()
+    p0 = stripped.find("(")
+    if p0 < 0:
+        return None
+    p1 = find_matching_paren(stripped, p0)
+    if p1 is None:
+        return None
+    head = stripped[:p0].strip()
+    inner = stripped[p0 + 1:p1].strip()
+    tail = stripped[p1 + 1:].strip()
+    if tail:
+        return None
+    return head, inner
+
+def _fmt_plain_expr(text: str) -> str:
+    txt = text.strip()
+    if not txt:
+        return ""
+    if txt.startswith("<") and txt.endswith(">"):
+        return txt
+    return format_operators(upper_kw(txt))
+
+def _split_assignment_top(text: str) -> tuple[str, str] | None:
+    s = text.strip()
+    depth = 0
+    in_str = False
+    str_char = ""
+    n = len(s)
+    i = 0
+    while i < n:
+        ch = s[i]
+        if in_str:
+            if ch == str_char:
+                in_str = False
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_str = True
+            str_char = ch
+            i += 1
+            continue
+        if ch == "(":
+            depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            if depth > 0:
+                depth -= 1
+            i += 1
+            continue
+        if ch == "=" and depth == 0:
+            prev = s[i - 1] if i > 0 else ""
+            nxt = s[i + 1] if i + 1 < n else ""
+            if prev in ("<", ">", "!", "=") or nxt == "=":
+                i += 1
+                continue
+            left = s[:i].strip()
+            right = s[i + 1:].strip()
+            if left and right:
+                return left, right
+        i += 1
+    return None
+
+def _format_set_item(item: str, depth: int) -> str:
+    txt = item.strip()
+    if txt.startswith("<") and txt.endswith(">"):
+        return txt
+    pair = _split_assignment_top(txt)
+    if pair is None:
+        return _fmt_plain_expr(txt)
+    left, right = pair
+    rhs = format_expr(right, depth)
+    rhs_lines = rhs.splitlines() or [rhs]
+    result = f"{_fmt_plain_expr(left)} = {rhs_lines[0]}"
+    if len(rhs_lines) > 1:
+        result += "\n" + "\n".join(rhs_lines[1:])
+    return result
+
+def format_insert_sql(sql: str, depth: int) -> str:
+    ki = _ki(depth)
+    ci = _ci(depth)
+
+    into_pos = find_kw_top(sql, "INTO")
+    values_pos = find_kw_top(sql, "VALUES")
+    if into_pos < 0 or values_pos < 0 or values_pos <= into_pos:
+        return _fmt_plain_expr(sql)
+
+    table_and_cols = sql[into_pos + len("INTO"):values_pos].strip()
+    values_part = sql[values_pos + len("VALUES"):].strip()
+
+    tc = _split_head_parenthesized(table_and_cols)
+    vv = _split_head_parenthesized(values_part)
+    if tc is None or vv is None:
+        return _fmt_plain_expr(sql)
+
+    table_name, cols_raw = tc
+    _, vals_raw = vv
+
+    cols = split_by_comma(cols_raw)
+    vals = split_by_comma(vals_raw)
+
+    lines: list[str] = []
+    lines.append(f"{ki}INSERT INTO {_fmt_plain_expr(table_name)}")
+    lines.append(f"{ci}(")
+    for idx, col in enumerate(cols):
+        suffix = "," if idx < len(cols) - 1 else ""
+        lines.append(f"{ci}{_fmt_plain_expr(col)}{suffix}")
+    lines.append(f"{ci})")
+    lines.append(f"{ki}VALUES")
+    lines.append(f"{ci}(")
+    for idx, val in enumerate(vals):
+        suffix = "," if idx < len(vals) - 1 else ""
+        _append_block(lines, ci, format_expr(val.strip(), depth), suffix)
+    lines.append(f"{ci})")
+    return "\n".join(lines)
+
+def format_update_sql(sql: str, depth: int) -> str:
+    ki = _ki(depth)
+    ci = _ci(depth)
+
+    set_pos = find_kw_top(sql, "SET")
+    if set_pos < 0:
+        return _fmt_plain_expr(sql)
+    where_pos = find_kw_top(sql, "WHERE")
+
+    table_part = sql[len("UPDATE"):set_pos].strip()
+    if where_pos >= 0:
+        set_part = sql[set_pos + len("SET"):where_pos].strip()
+        where_part = sql[where_pos + len("WHERE"):].strip()
+    else:
+        set_part = sql[set_pos + len("SET"):].strip()
+        where_part = ""
+
+    sets = split_by_comma(set_part)
+
+    lines: list[str] = []
+    lines.append(f"{ki}UPDATE")
+    lines.append(f"{ci}{_fmt_plain_expr(table_part)}")
+    lines.append(f"{ki}SET")
+    for idx, item in enumerate(sets):
+        suffix = "," if idx < len(sets) - 1 else ""
+        _append_block(lines, ci, _format_set_item(item, depth), suffix)
+
+    if where_part:
+        lines.append(f"{ki}WHERE")
+        conds = split_conditions(where_part)
+        for connector, cond in conds:
+            prefix = f"{connector} " if connector else ""
+            lines.append(f"{ci}{prefix}{format_expr(cond.strip(), depth)}")
+
+    return "\n".join(lines)
+
+def format_delete_sql(sql: str, depth: int) -> str:
+    ki = _ki(depth)
+    ci = _ci(depth)
+
+    from_pos = find_kw_top(sql, "FROM")
+    if from_pos < 0:
+        return _fmt_plain_expr(sql)
+    where_pos = find_kw_top(sql, "WHERE")
+
+    if where_pos >= 0:
+        table_part = sql[from_pos + len("FROM"):where_pos].strip()
+        where_part = sql[where_pos + len("WHERE"):].strip()
+    else:
+        table_part = sql[from_pos + len("FROM"):].strip()
+        where_part = ""
+
+    lines: list[str] = []
+    lines.append(f"{ki}DELETE FROM")
+    lines.append(f"{ci}{_fmt_plain_expr(table_part)}")
+
+    if where_part:
+        lines.append(f"{ki}WHERE")
+        conds = split_conditions(where_part)
+        for connector, cond in conds:
+            prefix = f"{connector} " if connector else ""
+            lines.append(f"{ci}{prefix}{format_expr(cond.strip(), depth)}")
+
+    return "\n".join(lines)
+
 def format_expr(expr: str, depth: int) -> str:
+    expr_strip = expr.strip()
+    if expr_strip.startswith("<") and expr_strip.endswith(">"):
+        return expr_strip
+
     paren_pos = find_subquery_paren(expr)
     if paren_pos is None:
         return format_operators(upper_kw(expr))
