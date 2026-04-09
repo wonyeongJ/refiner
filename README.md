@@ -12,7 +12,9 @@
 
 ### 1. SQL 포매터 (SQL Formatter)
 - 한 줄로 길게 작성된 쿼리를 표준 관례에 맞춰 탭(Tab) 들여쓰기 기반으로 깔끔하게 정렬합니다.
-- `SELECT`, `FROM`, `WHERE` 등 주요 키워드 기준의 줄바꿈은 물론, 서브쿼리의 재귀적인 들여쓰기까지 지원합니다.
+- `SELECT`, `INSERT`, `UPDATE`, `DELETE` 구문을 각각의 포맷 규칙에 맞춰 줄바꿈/들여쓰기 정렬합니다.
+- `SELECT` 뿐 아니라 `UPDATE SET`, `WHERE`, `VALUES` 내부의 서브쿼리도 재귀적으로 들여쓰기 정렬합니다.
+- MyBatis `<include ... />` 같은 XML 태그는 원형을 보존한 채 SQL 블록만 정렬합니다.
 - SQL 구문 강조(Syntax Highlighting) 기능을 통해 코드의 가독성을 극대화합니다.
 
 ### 2. Java VO 자동 생성 (Java VO Generator)
@@ -32,7 +34,6 @@
 - **Language**: Python 3.12+
 - **GUI Framework**: PyQt6
 - **Libraries**:
-    - `sqlparse`: SQL 토큰 분석 및 초기 파싱
     - `pyperclip`: 클립보드 복사 연동
     - `re`: 커스텀 파싱 및 구문 강조용 정규표현식 처리
 - **Icons**: ⚙ (Gears) Custom Icon

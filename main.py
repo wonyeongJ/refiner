@@ -75,8 +75,8 @@ class InputPanel(QWidget):
         self.editor = QPlainTextEdit()
         self.editor.setPlaceholderText(
             "여기에 SQL이나 JSON을 입력하세요...\n\n"
-            "예시 1) SELECT 정렬:\n"
-            "  select u.id, u.name, u.email from users u where u.active = 1 order by u.created_at desc;\n\n"
+            "예시 1) SQL 정렬 (SELECT / INSERT / UPDATE / DELETE):\n"
+            "  update lecturer set ls_type = (select max(ls_type) from lecturerspec where lno = #{lno}), isdel=1 where lno=#{lno};\n\n"
             "예시 2) Java VO 생성:\n"
             "  CREATE TABLE TB_USER (USER_ID NUMBER(10,0), USER_NM VARCHAR2(100), EMAIL VARCHAR2(200), REG_DT DATE);\n\n"
             "예시 3) JSON 정렬:\n"

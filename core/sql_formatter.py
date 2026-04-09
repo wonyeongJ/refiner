@@ -125,7 +125,7 @@ def render_clause(name: str, content: str, depth: int, lines: list) -> None:
         for idx, col in enumerate(cols):
             col = col.strip()
             
-            # DISTINCT ?덉쇅 泥섎━
+            # DISTINCT 컬럼은 DISTINCT 키워드를 유지한 채 표현식만 재정렬
             col_up = col.upper()
             if col_up.startswith("DISTINCT "):
                 fmt = "DISTINCT " + format_expr(col[9:].strip(), depth)
@@ -183,7 +183,7 @@ def render_clause(name: str, content: str, depth: int, lines: list) -> None:
             lines.append(f"{ci}{format_expr(content, depth)}")
 
 def format_operators(text: str) -> str:
-    # =, !=, <=, >=, <> ?곗궛??二쇰?????긽 1移?怨듬갚 蹂댁옣 (?? a=b -> a = b)
+    # =, !=, <=, >=, <> 연산자 주변 공백을 1칸으로 정규화 (예: a=b -> a = b)
     return re.sub(r'\s*(<>|!=|<=|>=|=)\s*', r' \1 ', text)
 
 def _split_head_parenthesized(text: str) -> tuple[str, str] | None:
