@@ -1,4 +1,4 @@
-﻿"""
+"""
 SQL Formatter - Custom Convention
 """
 import re
@@ -158,6 +158,8 @@ def render_clause(name: str, content: str, depth: int, lines: list) -> None:
             _append_expr_with_prefix(lines, ci, prefix, format_expr(item.strip(), depth))
 
     elif name in ("UNION", "UNION ALL", "INTERSECT", "EXCEPT"):
+        if lines and lines[-1] != "":
+            lines.append("")
         lines.append(f"{ki}{name}")
         lines.append("")
         if content:
@@ -172,10 +174,25 @@ def render_clause(name: str, content: str, depth: int, lines: list) -> None:
             tbl_formatted = format_expr(tbl_part, depth + 1)
             cond_part = content[on_pos+2:].strip()
             cond_formatted = format_expr(cond_part, depth + 1)
-            _append_expr_with_prefix(lines, ji, f"{name} ", tbl_formatted)
+            
+            if tbl_formatted.startswith("(\n"):
+                lines.append(f"{ji}{name}")
+                tbl_lines = tbl_formatted.splitlines()
+                lines.append(f"{ji}(")
+                lines.extend(tbl_lines[1:])
+            else:
+                _append_expr_with_prefix(lines, ji, f"{name} ", tbl_formatted)
+                
             _append_expr_with_prefix(lines, oi, f"{upper_kw('ON')} ", cond_formatted)
         else:
-            _append_expr_with_prefix(lines, ji, f"{name} ", format_expr(content, depth + 1))
+            tbl_formatted = format_expr(content, depth + 1)
+            if tbl_formatted.startswith("(\n"):
+                lines.append(f"{ji}{name}")
+                tbl_lines = tbl_formatted.splitlines()
+                lines.append(f"{ji}(")
+                lines.extend(tbl_lines[1:])
+            else:
+                _append_expr_with_prefix(lines, ji, f"{name} ", tbl_formatted)
 
     else:
         lines.append(f"{ki}{name}")
@@ -368,6 +385,243 @@ def format_delete_sql(sql: str, depth: int) -> str:
 
     return "\n".join(lines)
 
+def normalize_whitespace(text: str) -> str:
+    n = len(text)
+    in_str = False
+    str_char = ""
+    result = []
+    i = 0
+    while i < n:
+        ch = text[i]
+        if in_str:
+            result.append(ch)
+            if ch == "\\" and i + 1 < n:
+                result.append(text[i + 1])
+                i += 2
+                continue
+            if ch == str_char:
+                in_str = False
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_str = True
+            str_char = ch
+            result.append(ch)
+            i += 1
+            continue
+        if ch.isspace():
+            if result and not result[-1].isspace():
+                result.append(" ")
+            i += 1
+            continue
+        result.append(ch)
+        i += 1
+    return "".join(result).strip()
+
+def find_case_blocks(text: str) -> list[tuple[int, int]]:
+    n = len(text)
+    masked = _mask_sql_comments(text)
+    tu = masked.upper()
+    
+    positions = []
+    in_str = False
+    str_char = ""
+    paren_depth = 0
+    case_depth = 0
+    case_starts = []
+    
+    i = 0
+    while i < n:
+        ch = masked[i]
+        if in_str:
+            if ch == str_char:
+                in_str = False
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_str = True
+            str_char = ch
+            i += 1
+            continue
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            if paren_depth > 0:
+                paren_depth -= 1
+            i += 1
+            continue
+            
+        def is_kw(kw: str, index: int) -> bool:
+            if tu[index: index + len(kw)] != kw:
+                return False
+            if index > 0 and (masked[index - 1].isalnum() or masked[index - 1] == "_"):
+                return False
+            end = index + len(kw)
+            if end < n and (masked[end].isalnum() or masked[end] == "_"):
+                return False
+            return True
+            
+        if paren_depth == 0:
+            if is_kw("CASE", i):
+                if case_depth == 0:
+                    case_starts.append(i)
+                case_depth += 1
+                i += 4
+                continue
+            elif is_kw("END", i):
+                if case_depth > 0:
+                    case_depth -= 1
+                    if case_depth == 0:
+                        start = case_starts.pop()
+                        positions.append((start, i + 3))
+                i += 3
+                continue
+        i += 1
+    return positions
+
+def split_case_parts(case_text: str) -> dict:
+    masked = _mask_sql_comments(case_text)
+    tu = masked.upper()
+    n = len(case_text)
+    
+    in_str = False
+    str_char = ""
+    paren_depth = 0
+    case_depth = 0
+    keywords = []
+    
+    i = 4 # Skip "CASE"
+    while i < n - 3:
+        ch = masked[i]
+        if in_str:
+            if ch == str_char:
+                in_str = False
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_str = True
+            str_char = ch
+            i += 1
+            continue
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            if paren_depth > 0:
+                paren_depth -= 1
+            i += 1
+            continue
+            
+        def is_kw(kw: str, index: int) -> bool:
+            if tu[index: index + len(kw)] != kw:
+                return False
+            if index > 0 and (masked[index - 1].isalnum() or masked[index - 1] == "_"):
+                return False
+            end = index + len(kw)
+            if end < n and (masked[end].isalnum() or masked[end] == "_"):
+                return False
+            return True
+
+        if paren_depth == 0:
+            if is_kw("CASE", i):
+                case_depth += 1
+                i += 4
+                continue
+            elif is_kw("END", i):
+                if case_depth > 0:
+                    case_depth -= 1
+                i += 3
+                continue
+                
+            if case_depth == 0:
+                if is_kw("WHEN", i):
+                    keywords.append(("WHEN", i))
+                    i += 4
+                    continue
+                elif is_kw("THEN", i):
+                    keywords.append(("THEN", i))
+                    i += 4
+                    continue
+                elif is_kw("ELSE", i):
+                    keywords.append(("ELSE", i))
+                    i += 4
+                    continue
+        i += 1
+        
+    parts = {
+        "base": "",
+        "whens": [],
+        "else": ""
+    }
+    
+    if not keywords:
+        return parts
+        
+    first_kw, first_idx = keywords[0]
+    if first_kw == "WHEN":
+        parts["base"] = case_text[4:first_idx].strip()
+        
+    current_when = None
+    for idx, (kw, pos) in enumerate(keywords):
+        next_pos = keywords[idx + 1][1] if idx + 1 < len(keywords) else n - 3
+        content = case_text[pos + len(kw): next_pos].strip()
+        
+        if kw == "WHEN":
+            current_when = {"when": content, "then": ""}
+        elif kw == "THEN":
+            if current_when is not None:
+                current_when["then"] = content
+                parts["whens"].append(current_when)
+                current_when = None
+        elif kw == "ELSE":
+            parts["else"] = content
+            
+    return parts
+
+def format_single_case(case_text: str, depth: int) -> str:
+    parts = split_case_parts(case_text)
+    d = depth + 1
+    base_indent = _ki(d)
+    
+    # CASE starts at base_indent + ", " which is exactly 2 characters.
+    # To align END perfectly under the 'C' in 'CASE', we use exactly 2 spaces after base_indent.
+    end_indent = base_indent + "  "
+    # To indent WHEN/ELSE by exactly 4 spaces (1 full tab level) relative to CASE/END, we use exactly 2 + 4 = 6 spaces.
+    when_indent = base_indent + "      "
+    
+    lines = []
+    if parts["base"]:
+        base_fmt = format_expr(parts["base"], d)
+        lines.append(f"CASE {base_fmt}")
+    else:
+        lines.append("CASE")
+        
+    for w in parts["whens"]:
+        when_cond = format_expr(w["when"], d)
+        then_expr = format_expr(w["then"], d)
+        lines.append(f"{when_indent}WHEN {when_cond} THEN {then_expr}")
+        
+    if parts["else"]:
+        else_expr = format_expr(parts["else"], d)
+        lines.append(f"{when_indent}ELSE {else_expr}")
+        
+    lines.append(f"{end_indent}END")
+    return "\n".join(lines)
+
+def format_all_cases_in_expr(expr: str, depth: int) -> str:
+    blocks = find_case_blocks(expr)
+    if not blocks:
+        return expr
+    result = expr
+    for start, end in reversed(blocks):
+        case_text = expr[start:end]
+        formatted = format_single_case(case_text, depth)
+        result = result[:start] + formatted + result[end:]
+    return result
+
 def format_expr(expr: str, depth: int) -> str:
     expr_strip = expr.strip()
     if expr_strip.startswith("<") and expr_strip.endswith(">"):
@@ -375,19 +629,27 @@ def format_expr(expr: str, depth: int) -> str:
 
     paren_pos = find_subquery_paren(expr)
     if paren_pos is None:
-        return format_operators(upper_kw(expr))
+        normalized = normalize_whitespace(expr_strip)
+        expr_with_cases = format_all_cases_in_expr(normalized, depth)
+        return format_operators(upper_kw(expr_with_cases))
 
     paren_end = find_matching_paren(expr, paren_pos)
     if paren_end is None:
-        return format_operators(upper_kw(expr))
+        normalized = normalize_whitespace(expr_strip)
+        expr_with_cases = format_all_cases_in_expr(normalized, depth)
+        return format_operators(upper_kw(expr_with_cases))
 
-    before = format_operators(upper_kw(expr[:paren_pos]).strip())
+    before_norm = normalize_whitespace(expr[:paren_pos])
+    before = format_operators(upper_kw(format_all_cases_in_expr(before_norm, depth)))
+    
     inner = expr[paren_pos + 1: paren_end].strip()
-    after = format_operators(upper_kw(expr[paren_end + 1:]).strip())
+    
+    after_norm = normalize_whitespace(expr[paren_end + 1:])
+    after = format_operators(upper_kw(format_all_cases_in_expr(after_norm, depth)))
 
     sub_depth = depth + 1
 
-    sub_formatted = format_sql(inner, depth=sub_depth + 1)
+    sub_formatted = format_sql(inner, depth=sub_depth)
     
     result = ""
     if before:

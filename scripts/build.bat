@@ -20,11 +20,15 @@ if exist build rd /s /q build
 if exist dist rd /s /q dist
 if exist Refiner.spec del /f /q Refiner.spec
 
-echo.
 echo [2/4] Building %EXE_NAME% with PyInstaller...
 echo Icon Path: assets\images\icon.ico
 :: Bundling assets, core, and ui folders into the executable
-pyinstaller --noconsole --onefile ^
+set "PYINSTALLER_CMD=pyinstaller"
+if exist venv\Scripts\pyinstaller.exe (
+    set "PYINSTALLER_CMD=venv\Scripts\pyinstaller.exe"
+)
+
+%PYINSTALLER_CMD% --noconsole --onefile ^
     --icon="assets/images/icon.ico" ^
     --add-data "assets;assets" ^
     --add-data "core;core" ^
