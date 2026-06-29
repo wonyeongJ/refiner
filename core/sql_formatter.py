@@ -138,8 +138,9 @@ def render_clause(name: str, content: str, depth: int, lines: list) -> None:
     elif name == "FROM":
         lines.append(f"{ki}FROM")
         tables = split_by_comma(content)
-        for tbl in tables:
-            lines.append(f"{ci}{format_expr(tbl.strip(), depth)}")
+        for idx, tbl in enumerate(tables):
+            prefix = "" if idx == 0 else ", "
+            _append_expr_with_prefix(lines, ci, prefix, format_expr(tbl.strip(), depth))
 
     elif name in ("WHERE", "HAVING"):
         lines.append(f"{ki}{name}")
